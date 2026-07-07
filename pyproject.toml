@@ -1,0 +1,49 @@
+[project]
+name = "optionstrat-link"
+version = "0.1.0"
+description = "Turn resolved option structures into shareable OptionStrat builder URLs — zero-dependency core, adapters for contract-resolver structures and zts security_ids."
+readme = "README.md"
+authors = [
+    { name = "Stephen Zagar", email = "szagar@gmail.com" }
+]
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["trading", "options", "optionstrat", "visualization", "share-link"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+# The core is pure stdlib on purpose: build_url / OptionLeg / from_security_id
+# import nothing. The resolver adapter duck-types contract-resolver's shapes,
+# so even it needs no hard dependency.
+dependencies = []
+
+[project.optional-dependencies]
+# For the resolve-then-link workflow (examples/, integration tests).
+resolver = [
+    "contract-resolver",
+]
+
+[project.urls]
+Homepage = "https://github.com/szagar/optionstrat-link"
+Repository = "https://github.com/szagar/optionstrat-link"
+Issues = "https://github.com/szagar/optionstrat-link/issues"
+
+[tool.uv.sources]
+# Co-developed sibling, pinned to main (not a path dep) so this repo resolves
+# cleanly when consumed as a git dependency — same convention as contract-resolver.
+contract-resolver = { git = "https://github.com/szagar/contract-resolver.git", branch = "main" }
+
+[build-system]
+requires = ["uv_build>=0.8.3,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.1.1",
+    "ruff>=0.15.20",
+]
