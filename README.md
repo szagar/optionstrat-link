@@ -61,6 +61,37 @@ build_url(legs)
 # https://optionstrat.com/build/custom/SPX/-.SPXW260706P7500,.SPXW260706P7475
 ```
 
+### From futures-option order symbols
+
+Options on futures use a different token shape and can't come from a
+`security_id` (which omits the CME option product code). Feed the TastyTrade
+futures-option **order symbol** — `from_order_symbol` extracts the product
+code, series, expiry, and strike:
+
+```python
+from optionstrat_link import build_url, from_order_symbol
+
+legs = [
+    from_order_symbol("./ESU6 E3DN6 260714P7495"),
+    from_order_symbol("./ESU6 E3DN6 260714P7520", side="short"),
+    from_order_symbol("./ESU6 E3DN6 260714C7570", side="short"),
+    from_order_symbol("./ESU6 E3DN6 260714C7595"),
+]
+build_url(legs, strategy="iron-condor")
+# https://optionstrat.com/build/iron-condor/%2FESU26/.%2FE3DN26P7495,-.%2FE3DN26P7520,-.%2FE3DN26C7570,.%2FE3DN26C7595
+
+# A quarterly whose series block == the future contract (ES product code):
+build_url([from_order_symbol("./ESU6 260918C6400")])
+# https://optionstrat.com/build/custom/%2FESU26/.%2FESU26C6400
+```
+
+Or construct a `FuturesOptionLeg` directly if you already have the parts
+(`FuturesOptionLeg("EW4", "N", 26, "call", Decimal("6400"), "ESU6",
+side="short", ratio=2)` → `-.%2FEW4N26C6400x2`). `from_resolved_structure`
+handles futures automatically when a leg's `Security` carries an
+`order_symbol` (a futures option *without* one is rejected — the product code
+only lives there).
+
 ## URL format notes
 
 OptionStrat publishes no URL API; this encodes the format its own builder
@@ -69,9 +100,18 @@ comma-joined), verified against the live site 2026-07-06. `build_url` takes
 `base_url`/`strategy` overrides so any future drift is a call-site fix.
 
 Index weeklies link under their parent index page (`SPXW` legs → `/SPX/`) via
-`DISPLAY_UNDERLYING`; pass `underlying=` to override. Futures options are
-rejected loudly — OptionStrat's futures symbology differs and guessing would
-produce silently-wrong links.
+`DISPLAY_UNDERLYING`; pass `underlying=` to override.
+
+Futures options use a distinct shape (verified against a live builder URL
+2026-07-07): the page underlying is a *dated* contract (`/ESU26`) and every
+`/` is percent-encoded (`%2F`), matching OptionStrat's own slash-prefixed
+futures symbols. The leg token is
+`[-].%2F{PRODUCT}{MONTH}{YY}{C|P}{STRIKE}[x{RATIO}]` where `PRODUCT` is the
+CME option product code (`E3D`, `EW4`, `ES` …), `MONTH` a futures month code,
+and `YY` a 2-digit year — no 6-digit expiry (the site resolves it from the
+chain). The product code is CME taxonomy that can't be derived from
+(future, expiry, right, strike), so it must come from an order symbol or an
+explicit `FuturesOptionLeg`.
 
 ## Development
 
