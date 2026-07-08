@@ -92,6 +92,25 @@ handles futures automatically when a leg's `Security` carries an
 `order_symbol` (a futures option *without* one is rejected — the product code
 only lives there).
 
+### With entry prices
+
+Pass `entry_price=` to pin a leg's cost basis — it renders as a trailing
+`@price` so OptionStrat marks P&L against your real fill instead of the live
+mid. It works on any leg type and on `from_security_id` / `from_order_symbol`.
+The price is a per-contract premium *magnitude*; `side` carries direction:
+
+```python
+from decimal import Decimal
+from optionstrat_link import build_url, from_security_id
+
+legs = [
+    from_security_id("option:SPXW:2026-07-06:put:7500", side="short", entry_price=Decimal("12.5")),
+    from_security_id("option:SPXW:2026-07-06:put:7475", entry_price=Decimal("6.0")),
+]
+build_url(legs)
+# https://optionstrat.com/build/custom/SPX/-.SPXW260706P7500@12.5,.SPXW260706P7475@6
+```
+
 ## URL format notes
 
 OptionStrat publishes no URL API; this encodes the format its own builder
