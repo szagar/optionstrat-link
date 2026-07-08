@@ -79,7 +79,9 @@ def test_default_strategy_is_custom_and_underlying_derived() -> None:
 
 
 def test_weekly_index_root_maps_to_parent_underlying() -> None:
-    url = build_url([OptionLeg("SPXW", date(2026, 7, 7), "call", D("7540"), side="short")])
+    url = build_url(
+        [OptionLeg("SPXW", date(2026, 7, 7), "call", D("7540"), side="short")]
+    )
     assert "/custom/SPX/" in url
     assert "-.SPXW260707C7540" in url  # leg keeps the tradable root
 
@@ -116,7 +118,9 @@ def test_futures_iron_condor_matches_live_builder_url() -> None:
 
 
 def test_futures_leg_token_and_ratio() -> None:
-    leg = FuturesOptionLeg("EW4", "N", 26, "call", D("6400"), "ESU6", side="short", ratio=2)
+    leg = FuturesOptionLeg(
+        "EW4", "N", 26, "call", D("6400"), "ESU6", side="short", ratio=2
+    )
     assert encode_leg(leg) == "-.%2FEW4N26C6400x2"
 
 
@@ -142,12 +146,99 @@ def test_futures_leg_validation() -> None:
         FuturesOptionLeg("E3D", "N", 26, "call", D("1"), "ES")
 
 
+# --- entry price ----------------------------------------------------------------
+
+
+def test_entry_price_equity_token() -> None:
+    # Captured from OptionStrat's own builder 2026-07-07: setting a custom entry
+    # price appends "@{price}" to the leg token.
+    leg = OptionLeg(
+        "SPY", date(2026, 9, 18), "put", D("600"), side="short", entry_price=D("9.99")
+    )
+    assert encode_leg(leg) == "-.SPY260918P600@9.99"
+
+
+def test_entry_price_after_ratio() -> None:
+    # Verified live: "@price" comes *after* the ratio (SPY 600P x2 @ 9.99).
+    leg = OptionLeg(
+        "SPY",
+        date(2026, 9, 18),
+        "put",
+        D("600"),
+        side="short",
+        ratio=2,
+        entry_price=D("9.99"),
+    )
+    assert encode_leg(leg) == "-.SPY260918P600x2@9.99"
+
+
+def test_entry_price_futures_token() -> None:
+    leg = FuturesOptionLeg(
+        "E3D", "N", 2026, "put", D("7495"), "ESU26", entry_price=D("29.5")
+    )
+    assert encode_leg(leg) == ".%2FE3DN26P7495@29.5"
+
+
+def test_entry_price_trims_trailing_zeros() -> None:
+    whole = OptionLeg("SPY", date(2026, 9, 18), "put", D("600"), entry_price=D("21.00"))
+    assert encode_leg(whole).endswith("@21")
+    frac = OptionLeg("SPY", date(2026, 9, 18), "put", D("600"), entry_price=D("0.175"))
+    assert encode_leg(frac).endswith("@0.175")
+
+
+def test_entry_price_omitted_leaves_no_at() -> None:
+    assert "@" not in encode_leg(OptionLeg("SPY", date(2026, 9, 18), "put", D("600")))
+
+
+def test_entry_price_negative_rejected() -> None:
+    with pytest.raises(ValueError, match="entry_price"):
+        OptionLeg("SPY", date(2026, 9, 18), "put", D("600"), entry_price=D("-1"))
+    with pytest.raises(ValueError, match="entry_price"):
+        FuturesOptionLeg("E3D", "N", 26, "put", D("7495"), "ESU26", entry_price=D("-1"))
+
+
+def test_from_security_id_carries_entry_price() -> None:
+    leg = from_security_id(
+        "option:SPXW:2026-07-06:put:7500", side="short", entry_price=D("12.5")
+    )
+    assert leg.entry_price == D("12.5")
+    assert encode_leg(leg) == "-.SPXW260706P7500@12.5"
+
+
+def test_build_url_with_prices_end_to_end() -> None:
+    # Matches the URL confirmed against the live builder 2026-07-07.
+    legs = [
+        OptionLeg(
+            "SPY",
+            date(2026, 9, 18),
+            "put",
+            D("600"),
+            side="short",
+            entry_price=D("9.99"),
+        ),
+        OptionLeg("SPY", date(2026, 9, 18), "put", D("590")),
+    ]
+    assert build_url(legs) == (
+        "https://optionstrat.com/build/custom/SPY/-.SPY260918P600@9.99,.SPY260918P590"
+    )
+
+
 # --- from_order_symbol -----------------------------------------------------------
+
+
+def test_from_order_symbol_carries_entry_price() -> None:
+    leg = from_order_symbol(
+        "./ESU6 E3DN6 260714P7495", side="short", entry_price=D("29.5")
+    )
+    assert leg.entry_price == D("29.5")
+    assert encode_leg(leg) == "-.%2FE3DN26P7495@29.5"
 
 
 def test_order_symbol_space_separated() -> None:
     leg = from_order_symbol("./ESU6 E1CN6 260701C6325", side="short")
-    assert leg == FuturesOptionLeg("E1C", "N", 26, "call", D("6325"), "ESU26", side="short")
+    assert leg == FuturesOptionLeg(
+        "E1C", "N", 26, "call", D("6325"), "ESU26", side="short"
+    )
     assert encode_leg(leg) == "-.%2FE1CN26C6325"
     assert leg.underlying == "/ESU26"
 
@@ -323,7 +414,9 @@ def test_resolved_futures_option_uses_order_symbol() -> None:
 
 
 def test_resolved_futures_option_without_order_symbol_raises() -> None:
-    sec = _Security("E1CN6", date(2026, 7, 1), D("6325"), "call", security_type="future_option")
+    sec = _Security(
+        "E1CN6", date(2026, 7, 1), D("6325"), "call", security_type="future_option"
+    )
     s = _ResolvedStructure(
         legs={"leg": _ResolvedLeg(sec)},
         structure=_OptionStructure(legs={"leg": _LegDescription("long")}),
