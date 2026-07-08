@@ -95,9 +95,15 @@ only lives there).
 ## URL format notes
 
 OptionStrat publishes no URL API; this encodes the format its own builder
-writes to the address bar (`[-].{ROOT}{YYMMDD}{C|P}{STRIKE}[x{RATIO}]`,
+writes to the address bar (`[-].{ROOT}{YYMMDD}{C|P}{STRIKE}[x{RATIO}][@{PRICE}]`,
 comma-joined), verified against the live site 2026-07-06. `build_url` takes
 `base_url`/`strategy` overrides so any future drift is a call-site fix.
+
+Pass `entry_price=` on a leg (or to `from_security_id` / `from_order_symbol`) to
+pin its cost basis — it renders as a trailing `@price`, *after* the ratio
+(`-.SPY260918P600x2@9.99`), and OptionStrat marks P&L against it instead of the
+live mid (verified against the live builder 2026-07-07). It's a per-contract
+premium *magnitude*; `side` carries direction. Omit it to use the live mid.
 
 Index weeklies link under their parent index page (`SPXW` legs → `/SPX/`) via
 `DISPLAY_UNDERLYING`; pass `underlying=` to override.

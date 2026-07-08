@@ -6,12 +6,14 @@ OptionStrat's builder loads a full strategy from the URL path::
 
 Each leg is a compact OCC-style token::
 
-    [-].{ROOT}{YYMMDD}{C|P}{STRIKE}[x{RATIO}]
+    [-].{ROOT}{YYMMDD}{C|P}{STRIKE}[x{RATIO}][@{PRICE}]
 
 * leading ``-`` — a short (sold) leg; absent for long
 * ``.`` — marks an option leg (a bare token would be a share leg)
 * ``STRIKE`` — plain decimal, no zero-padding (``650``, ``222.5``)
 * ``x{RATIO}`` — only when the leg quantity differs from 1
+* ``@{PRICE}`` — optional per-contract cost basis OptionStrat marks P&L against,
+  after the ratio (``-.SPY260918P600x2@9.99``); omit to use the live mid
 
 Example (iron condor)::
 
@@ -114,14 +116,18 @@ class OptionLeg:
     strike: Decimal
     side: Side = "long"
     ratio: int = 1
+    entry_price: Decimal | None = None  # per-contract cost basis; encodes as "@{price}"
 
     def __post_init__(self) -> None:
         if self.option_type not in ("call", "put"):
-            raise ValueError(f"option_type must be 'call' or 'put', got {self.option_type!r}")
+            raise ValueError(
+                f"option_type must be 'call' or 'put', got {self.option_type!r}"
+            )
         if self.side not in ("long", "short"):
             raise ValueError(f"side must be 'long' or 'short', got {self.side!r}")
         if self.ratio < 1:
             raise ValueError(f"ratio must be >= 1, got {self.ratio}")
+        _validate_entry_price(self.entry_price)
 
 
 @dataclass(frozen=True)
@@ -142,20 +148,28 @@ class FuturesOptionLeg:
     future: str  # dated underlying contract: "ESU26" (also "ESU6", "/ESU26")
     side: Side = "long"
     ratio: int = 1
+    entry_price: Decimal | None = None  # per-contract cost basis; encodes as "@{price}"
 
     def __post_init__(self) -> None:
         if self.month_code.upper() not in MONTH_CODES:
-            raise ValueError(f"month_code must be one of {MONTH_CODES}, got {self.month_code!r}")
+            raise ValueError(
+                f"month_code must be one of {MONTH_CODES}, got {self.month_code!r}"
+            )
         if not (0 <= self.year <= 99 or 2000 <= self.year <= 2099):
             raise ValueError(f"year must be 2-digit or 20xx, got {self.year}")
         if self.option_type not in ("call", "put"):
-            raise ValueError(f"option_type must be 'call' or 'put', got {self.option_type!r}")
+            raise ValueError(
+                f"option_type must be 'call' or 'put', got {self.option_type!r}"
+            )
         if self.side not in ("long", "short"):
             raise ValueError(f"side must be 'long' or 'short', got {self.side!r}")
         if self.ratio < 1:
             raise ValueError(f"ratio must be >= 1, got {self.ratio}")
         if not _FUTURE_CONTRACT_RE.match(self.future.upper()):
-            raise ValueError(f"future must be a dated contract like 'ESU26', got {self.future!r}")
+            raise ValueError(
+                f"future must be a dated contract like 'ESU26', got {self.future!r}"
+            )
+        _validate_entry_price(self.entry_price)
 
     @property
     def underlying(self) -> str:
@@ -174,10 +188,18 @@ def _expand_year(digits: str, *, base: int) -> int:
     return yy + 10 if yy < base else yy
 
 
-def _strike_str(strike: Decimal) -> str:
+def _fmt_decimal(value: Decimal) -> str:
     """``650.00`` -> ``650``; ``222.50`` -> ``222.5`` (no exponent, no padding)."""
-    text = format(strike.normalize(), "f")
+    text = format(value.normalize(), "f")
     return text[:-2] if text.endswith(".0") else text
+
+
+def _validate_entry_price(price: Decimal | None) -> None:
+    """Entry price is a per-contract premium *magnitude* (side carries direction)."""
+    if price is not None and price < 0:
+        raise ValueError(
+            f"entry_price must be >= 0 (magnitude; side is separate), got {price}"
+        )
 
 
 def encode_leg(leg: OptionLeg | FuturesOptionLeg) -> str:
@@ -186,17 +208,25 @@ def encode_leg(leg: OptionLeg | FuturesOptionLeg) -> str:
     Equity/index tokens contain no reserved characters; futures tokens carry
     the slash of the futures symbol percent-encoded (``.%2FE3DN26P7495``),
     matching what OptionStrat's own encoder emits.
+
+    An ``entry_price`` renders as a trailing ``@{price}`` — the per-contract cost
+    basis OptionStrat marks P&L against — *after* the ratio
+    (``-.SPY260918P600x2@9.99``), matching the builder's own encoding (verified
+    against the live site 2026-07-07). ``@`` is left literal, as OptionStrat emits.
     """
     sign = "-" if leg.side == "short" else ""
     cp = "C" if leg.option_type == "call" else "P"
     ratio = f"x{leg.ratio}" if leg.ratio != 1 else ""
+    price = f"@{_fmt_decimal(leg.entry_price)}" if leg.entry_price is not None else ""
     if isinstance(leg, FuturesOptionLeg):
-        series = f"{leg.product_code.upper()}{leg.month_code.upper()}{leg.year % 100:02d}"
-        symbol = f"./{series}{cp}{_strike_str(leg.strike)}"
+        series = (
+            f"{leg.product_code.upper()}{leg.month_code.upper()}{leg.year % 100:02d}"
+        )
+        symbol = f"./{series}{cp}{_fmt_decimal(leg.strike)}"
     else:
         yymmdd = leg.expiry.strftime("%y%m%d")
-        symbol = f".{leg.root.upper()}{yymmdd}{cp}{_strike_str(leg.strike)}"
-    return f"{sign}{quote(symbol, safe='.')}{ratio}"
+        symbol = f".{leg.root.upper()}{yymmdd}{cp}{_fmt_decimal(leg.strike)}"
+    return f"{sign}{quote(symbol, safe='.')}{ratio}{price}"
 
 
 def build_url(
@@ -229,7 +259,13 @@ def build_url(
     return f"{base_url}/{strategy}/{quote(underlying.upper(), safe='')}/{tokens}"
 
 
-def from_security_id(security_id: str, *, side: Side = "long", ratio: int = 1) -> OptionLeg:
+def from_security_id(
+    security_id: str,
+    *,
+    side: Side = "long",
+    ratio: int = 1,
+    entry_price: Decimal | None = None,
+) -> OptionLeg:
     """An ``OptionLeg`` from a zts/tt-ledger canonical option security_id::
 
         option:SPXW:2026-07-06:call:7540  ->  .SPXW260706C7540
@@ -237,6 +273,8 @@ def from_security_id(security_id: str, *, side: Side = "long", ratio: int = 1) -
     Only ``option:*`` ids resolve. Futures options (``future_option:*``) are
     rejected because the id omits the CME option product code the OptionStrat
     token needs — use :func:`from_order_symbol` or a :class:`FuturesOptionLeg`.
+
+    ``entry_price`` is the optional per-contract cost basis (encodes as ``@price``).
     """
     parts = security_id.split(":")
     if len(parts) != 5 or parts[0] != "option":
@@ -258,10 +296,17 @@ def from_security_id(security_id: str, *, side: Side = "long", ratio: int = 1) -
         strike=strike,
         side=side,
         ratio=ratio,
+        entry_price=entry_price,
     )
 
 
-def from_order_symbol(symbol: str, *, side: Side = "long", ratio: int = 1) -> FuturesOptionLeg:
+def from_order_symbol(
+    symbol: str,
+    *,
+    side: Side = "long",
+    ratio: int = 1,
+    entry_price: Decimal | None = None,
+) -> FuturesOptionLeg:
     """A ``FuturesOptionLeg`` from a TastyTrade futures-option order symbol::
 
         ./ESU6 E1CN6 260701C6325   ->  .%2FE1CN26C6325 on the %2FESU26 page
@@ -275,6 +320,8 @@ def from_order_symbol(symbol: str, *, side: Side = "long", ratio: int = 1) -> Fu
     the series year is the first match >= the expiry year (a serial option's
     contract month can fall in the year after its expiry), and the future's
     year the first match >= the series year.
+
+    ``entry_price`` is the optional per-contract cost basis (encodes as ``@price``).
     """
     head = _TT_HEAD_RE.match(symbol.strip().upper())
     if not head:
@@ -303,6 +350,7 @@ def from_order_symbol(symbol: str, *, side: Side = "long", ratio: int = 1) -> Fu
         future=f"{future_m.group('root')}{future_m.group('month')}{future_yy:02d}",
         side=side,
         ratio=ratio,
+        entry_price=entry_price,
     )
 
 
@@ -346,17 +394,24 @@ def from_resolved_structure(resolution) -> list[OptionLeg | FuturesOptionLeg]:  
         if order_symbol is not None and order_symbol.startswith("./"):
             legs.append(from_order_symbol(order_symbol, side=desc.side, ratio=ratio))
             continue
-        sec_type = getattr(getattr(sec, "security_type", None), "value", None) or getattr(
-            sec, "security_type", None
-        )
+        sec_type = getattr(
+            getattr(sec, "security_type", None), "value", None
+        ) or getattr(sec, "security_type", None)
         if sec_type == "future_option":
             raise ValueError(
                 f"leg {role!r} is a futures option without an order_symbol; the CME "
                 f"product code OptionStrat needs is only carried there: {sec!r}"
             )
         root = sec.option_root or sec.root_symbol or sec.underlying
-        if root is None or sec.expiry is None or sec.strike is None or sec.option_type is None:
-            raise ValueError(f"leg {role!r} security is missing option identity fields: {sec!r}")
+        if (
+            root is None
+            or sec.expiry is None
+            or sec.strike is None
+            or sec.option_type is None
+        ):
+            raise ValueError(
+                f"leg {role!r} security is missing option identity fields: {sec!r}"
+            )
         legs.append(
             OptionLeg(
                 root=root,
